@@ -68,9 +68,7 @@ def findDimensions(image, homography):
     min_x = min(0, min_x)
     min_y = min(0, min_y)
 
-    new_size = (max_x - min_x, max_y - min_y)
-
-    return new_size
+    return (min_x, min_y, max_x, max_y)
 
 def stitchImages(base_img_rgb, dir_list, output, round):
 
@@ -160,8 +158,8 @@ def stitchImages(base_img_rgb, dir_list, output, round):
         # if ( closestImage == None or averagePointDistance < closestImage['dist'] ):
         if ( closestImage == None or inlierRatio > closestImage['inliers'] ):
             closestImage = {}
-            closestImage['inliers'] = inlierRatio
             closestImage['h'] = H
+            closestImage['inliers'] = inlierRatio
             closestImage['dist'] = averagePointDistance
             closestImage['path'] = next_img_path
             closestImage['rgb'] = next_img_rgb
@@ -171,6 +169,7 @@ def stitchImages(base_img_rgb, dir_list, output, round):
             closestImage['match'] = matches_subset
 
     print "Closest Image: ", closestImage['path']
+    print "Closest Image Ratio: ", closestImage['inliers']
 
     new_dir_list = filter(lambda x: x != closestImage['path'], dir_list)
 
@@ -178,57 +177,115 @@ def stitchImages(base_img_rgb, dir_list, output, round):
     # cv2.destroyAllWindows()
 
     H = closestImage['h']
+    H = H / H[2,2]
     H_inv = linalg.inv(H)
 
-    # Find the maximum dimensions for the composite picture
-    new_dims_1 = findDimensions(base_img, H)
-    new_dims_2 = findDimensions(closestImage['img'], H_inv)
-    new_w = int(math.ceil(max(new_dims_1[0], new_dims_2[0])))
-    new_h = int(math.ceil(max(new_dims_1[1], new_dims_2[1])))
+    if ( closestImage['inliers'] > 0.1 ): # and 
 
-    if ( closestImage['inliers'] > 0.25 and 
-        (new_w > base_img_rgb.shape[1] or new_h > base_img_rgb.shape[0]) ):
+        (min_x, min_y, max_x, max_y) = findDimensions(closestImage['img'], H_inv)
+
+        # Adjust max_x and max_y by base img size
+        max_x = max(max_x, base_img.shape[1])
+        max_y = max(max_y, base_img.shape[0])
+
+        move_h = np.matrix(np.identity(3), np.float32)
+
+        if ( min_x < 0 ):
+            move_h[0,2] += -min_x
+            max_x += -min_x
+
+        if ( min_y < 0 ):
+            move_h[1,2] += -min_y
+            max_y += -min_y
+
+        print "Homography: \n", H
+        print "Inverse Homography: \n", H_inv
+        print "Min Points: ", (min_x, min_y)
+
+        mod_inv_h = move_h * H_inv
+
+        img_w = int(math.ceil(max_x))
+        img_h = int(math.ceil(max_y))
+
+        print "New Dimensions: ", (img_w, img_h)
 
         # Warp the new image given the homography from the old image
-        next_img_warp = cv2.warpPerspective(closestImage['rgb'], H_inv, (new_w, new_h))
+        base_img_warp = cv2.warpPerspective(base_img_rgb, move_h, (img_w, img_h))
+        print "Warped base image"
+
+        # utils.showImage(base_img_warp, scale=(0.2, 0.2), timeout=5000)
+        # cv2.destroyAllWindows()
+
+        next_img_warp = cv2.warpPerspective(closestImage['rgb'], mod_inv_h, (img_w, img_h))
+        print "Warped next image"
+
+        # utils.showImage(next_img_warp, scale=(0.2, 0.2), timeout=5000)
+        # cv2.destroyAllWindows()
 
         # Put the base image on an enlarged palette
-        enlarged_base_img = np.zeros((new_h, new_w, 3), np.float32)
+        enlarged_base_img = np.zeros((img_h, img_w, 3), np.uint8)
 
         print "Enlarged Image Shape: ", enlarged_base_img.shape
         print "Base Image Shape: ", base_img_rgb.shape
+        print "Base Image Warp Shape: ", base_img_warp.shape
 
-        enlarged_base_img[:base_img_rgb.shape[0],:base_img_rgb.shape[1]] = base_img_rgb
+        # enlarged_base_img[y:y+base_img_rgb.shape[0],x:x+base_img_rgb.shape[1]] = base_img_rgb
+        # enlarged_base_img[:base_img_warp.shape[0],:base_img_warp.shape[1]] = base_img_warp
 
         # Create a mask from the warped image for constructing masked composite
         (ret,data_map) = cv2.threshold(cv2.cvtColor(next_img_warp, cv2.COLOR_BGR2GRAY), 
             0, 255, cv2.THRESH_BINARY)
 
-        # First add the base image
-        pre_img = cv2.add(enlarged_base_img, next_img_warp, 
+        enlarged_base_img = cv2.add(enlarged_base_img, base_img_warp, 
             mask=np.bitwise_not(data_map), 
             dtype=cv2.CV_8U)
 
         # Now add the warped image
-        final_img = cv2.add(pre_img, next_img_warp, 
+        final_img = cv2.add(enlarged_base_img, next_img_warp, 
             dtype=cv2.CV_8U)
+
+        # utils.showImage(final_img, scale=(0.2, 0.2), timeout=0)
+        # cv2.destroyAllWindows()
 
         # Crop off the black edges
         final_gray = cv2.cvtColor(final_img, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(final_gray, 1, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnt = contours[0]
-        x,y,w,h = cv2.boundingRect(cnt)
-        final_img_crop = final_img[y:y+h,x:x+w]
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        print "Found %d contours..." % (len(contours))
+
+        max_area = 0
+        best_rect = (0,0,0,0)
+
+        for cnt in contours:
+            x,y,w,h = cv2.boundingRect(cnt)
+            # print "Bounding Rectangle: ", (x,y,w,h)
+
+            deltaHeight = h-y
+            deltaWidth = w-x
+
+            area = deltaHeight * deltaWidth
+
+            if ( area > max_area and deltaHeight > 0 and deltaWidth > 0):
+                max_area = area
+                best_rect = (x,y,w,h)
+
+        if ( max_area > 0 ):
+            print "Maximum Contour: ", max_area
+            print "Best Rectangle: ", best_rect
+
+            final_img_crop = final_img[best_rect[1]:best_rect[1]+best_rect[3],
+                    best_rect[0]:best_rect[0]+best_rect[2]]
+
+            # utils.showImage(final_img_crop, scale=(0.2, 0.2), timeout=0)
+            # cv2.destroyAllWindows()
+
+            final_img = final_img_crop
 
         # Write out the current round
         final_filename = "%s/%d.JPG" % (output, round)
-        cv2.imwrite(final_filename, final_img_crop)
+        cv2.imwrite(final_filename, final_img)
 
-        utils.showImage(final_img_crop, scale=(0.2, 0.2), timeout=5000)
-        cv2.destroyAllWindows()
-
-        return stitchImages(final_img_crop, new_dir_list, output, round+1)
+        return stitchImages(final_img, new_dir_list, output, round+1)
 
     else:
 
@@ -264,6 +321,8 @@ dir_list = map(lambda x: dir_name + "/" + x, dir_list)
 dir_list = filter(lambda x: x != key_frame, dir_list)
 
 base_img_rgb = cv2.imread(key_frame)
+# utils.showImage(base_img_rgb, scale=(0.2, 0.2), timeout=0)
+# cv2.destroyAllWindows()
 
 final_img = stitchImages(base_img_rgb, dir_list, output_dir, 0)
 
