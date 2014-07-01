@@ -70,10 +70,17 @@ def findDimensions(image, homography):
 
     return (min_x, min_y, max_x, max_y)
 
-def stitchImages(base_img_rgb, dir_list, output, round):
+def stitchImages(base_img_rgb, dir_list, output, key_frame_file, round=0):
 
     if ( len(dir_list) < 1 ):
         return base_img_rgb
+
+   # print base_img_rgb.channels()
+# if(image.channels()==1)
+# {      /* Grayscale */                                             }
+# else if (image.channels==4)
+# {      /* ARGB or RGBA image */    
+
 
     base_img = cv2.GaussianBlur(cv2.cvtColor(base_img_rgb,cv2.COLOR_BGR2GRAY), (5,5), 0)
 
@@ -285,44 +292,52 @@ def stitchImages(base_img_rgb, dir_list, output, round):
         final_filename = "%s/%d.JPG" % (output, round)
         cv2.imwrite(final_filename, final_img)
 
-        return stitchImages(final_img, new_dir_list, output, round+1)
+        return stitchImages(final_img, new_dir_list, output, key_frame_file, round+1)
 
     else:
 
-        return stitchImages(base_img_rgb, new_dir_list, output, round+1)
+        return stitchImages(base_img_rgb, new_dir_list, output, key_frame_file, round+1)
+
+
+def main(image_dir, key_frame, output_dir, img_filter=None):
+    '''
+    image_dir: 'directory' containing all images
+    key_frame: 'dir/name.jpg' of the base image
+    output_dir: 'directory' where to save output images
+    optional: 
+       img_filter = 'JPG'; None->Take all images
+    '''
+
+    key_frame_file = os.path.split(key_frame)[-1]
+    
+    # Open the directory given in the arguments
+    dir_list = []
+    try:
+        dir_list = os.listdir(image_dir)
+        if img_filter:
+            dir_list = filter(lambda x: x.find(img_filter) > -1, dir_list)
+    
+    except:
+        print >> sys.stderr, ("Unable to open directory: %s" % image_dir)
+        sys.exit(-1)
+
+    dir_list = map(lambda x: os.path.join(image_dir, x), dir_list)
+    
+    dir_list = filter(lambda x: x != key_frame, dir_list)
+
+    base_img_rgb = cv2.imread(key_frame)
+    if base_img_rgb == None:
+        raise IOError("%s doesn't exist" %key_frame)
+    # utils.showImage(base_img_rgb, scale=(0.2, 0.2), timeout=0)
+    # cv2.destroyAllWindows()
+    
+    final_img = stitchImages(base_img_rgb, dir_list, output_dir, key_frame_file, 0)
 
 
  # ----------------------------------------------------------------------------
-
-if ( len(sys.argv) < 4 ):
-    print >> sys.stderr, ("Usage: %s <image_dir> <key_frame> <output>" % sys.argv[0])
-    sys.exit(-1)
-
-# output directory
-output_dir = sys.argv[3]
-
-# Key frame
-key_frame = sys.argv[2]
-key_frame_file = key_frame.split('/')[-1]
-
-# Open the directory given in the arguments
-dir_name = sys.argv[1]
-dir_list = []
-try:
-    dir_list = os.listdir(dir_name)
-    dir_list = filter(lambda x: x.find('JPG') > -1, dir_list)
-
-except:
-    print >> sys.stderr, ("Unable to open directory: %s" % dir_name)
-    sys.exit(-1)
-
-dir_list = map(lambda x: dir_name + "/" + x, dir_list)
-
-dir_list = filter(lambda x: x != key_frame, dir_list)
-
-base_img_rgb = cv2.imread(key_frame)
-# utils.showImage(base_img_rgb, scale=(0.2, 0.2), timeout=0)
-# cv2.destroyAllWindows()
-
-final_img = stitchImages(base_img_rgb, dir_list, output_dir, 0)
+if __name__ == '__main__':
+    if ( len(args) < 4 ):
+        print >> sys.stderr, ("Usage: %s <image_dir> <key_frame> <output>" % args[0])
+        sys.exit(-1)
+    run(sys.args[1:])
 
